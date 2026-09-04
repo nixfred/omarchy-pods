@@ -7,6 +7,8 @@
 
 // Fixed header data[0] through data[10], then a 16-byte encrypted payload.
 static constexpr int proximityPairingBytes = 11 + 16;
+static constexpr int scanWindowMs = 4000;
+static constexpr int scanIdleMs = 8000;
 
 AirpodsTrayApp::Enums::AirPodsModel getModelName(quint16 modelId)
 {
@@ -91,7 +93,11 @@ QString getConnectionStateName(BleInfo::ConnectionState state)
 BleManager::BleManager(QObject *parent) : QObject(parent)
 {
     discoveryAgent = new QBluetoothDeviceDiscoveryAgent(this);
-    discoveryAgent->setLowEnergyDiscoveryTimeout(0); // Continuous scanning
+    discoveryAgent->setLowEnergyDiscoveryTimeout(scanWindowMs);
+
+    rescanTimer = new QTimer(this);
+    rescanTimer->setSingleShot(true);
+    connect(rescanTimer, &QTimer::timeout, this, &BleManager::beginScanWindow);
 
     connect(discoveryAgent, &QBluetoothDeviceDiscoveryAgent::deviceDiscovered,
             this, &BleManager::onDeviceDiscovered);
@@ -110,21 +116,32 @@ BleManager::~BleManager()
     // redundant and ran before Qt's own child cleanup pass. Now empty.
 }
 
+void BleManager::beginScanWindow()
+{
+    if (!scanRequested || discoveryAgent->isActive())
+        return;
+    discoveryAgent->start(QBluetoothDeviceDiscoveryAgent::LowEnergyMethod);
+}
+
 void BleManager::startScan()
 {
     LOG_DEBUG("Starting BLE scan...");
-    discoveryAgent->start(QBluetoothDeviceDiscoveryAgent::LowEnergyMethod);
+    scanRequested = true;
+    rescanTimer->stop();
+    beginScanWindow();
 }
 
 void BleManager::stopScan()
 {
     LOG_DEBUG("Stopping BLE scan...");
+    scanRequested = false;
+    rescanTimer->stop();
     discoveryAgent->stop();
 }
 
 bool BleManager::isScanning() const
 {
-    return discoveryAgent->isActive();
+    return scanRequested || discoveryAgent->isActive();
 }
 
 void BleManager::onDeviceDiscovered(const QBluetoothDeviceInfo &info)
@@ -228,10 +245,9 @@ void BleManager::onDeviceDiscovered(const QBluetoothDeviceInfo &info)
 
 void BleManager::onScanFinished()
 {
-    if (discoveryAgent->isActive())
-    {
-        discoveryAgent->start(QBluetoothDeviceDiscoveryAgent::LowEnergyMethod);
-    }
+    // The idle gap lets BlueZ re-arm passive scanning for bonded LE devices.
+    if (scanRequested)
+        rescanTimer->start(scanIdleMs);
 }
 
 void BleManager::onErrorOccurred(QBluetoothDeviceDiscoveryAgent::Error error)
