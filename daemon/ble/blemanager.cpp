@@ -94,6 +94,11 @@ BleManager::BleManager(QObject *parent) : QObject(parent)
 {
     discoveryAgent = new QBluetoothDeviceDiscoveryAgent(this);
     discoveryAgent->setLowEnergyDiscoveryTimeout(scanWindowMs);
+    // -1 means this platform will not be told how long to scan for. The window
+    // is then whatever the backend chooses; the idle gap after it still
+    // applies, so say so rather than appearing to have set something.
+    if (discoveryAgent->lowEnergyDiscoveryTimeout() == -1)
+        LOG_DEBUG("Platform ignores the LE discovery timeout; scan window length is backend-defined");
 
     rescanTimer = new QTimer(this);
     rescanTimer->setSingleShot(true);
@@ -103,6 +108,10 @@ BleManager::BleManager(QObject *parent) : QObject(parent)
             this, &BleManager::onDeviceDiscovered);
     connect(discoveryAgent, &QBluetoothDeviceDiscoveryAgent::finished,
             this, &BleManager::onScanFinished);
+    // stop() ends a window with canceled(), never finished(). Without this a
+    // scan asked for while a stop is still in flight is dropped on the floor.
+    connect(discoveryAgent, &QBluetoothDeviceDiscoveryAgent::canceled,
+            this, &BleManager::onScanCanceled);
     connect(discoveryAgent, &QBluetoothDeviceDiscoveryAgent::errorOccurred,
             this, &BleManager::onErrorOccurred);
 }
@@ -248,6 +257,15 @@ void BleManager::onScanFinished()
     // The idle gap lets BlueZ re-arm passive scanning for bonded LE devices.
     if (scanRequested)
         rescanTimer->start(scanIdleMs);
+}
+
+void BleManager::onScanCanceled()
+{
+    // startScan() during a cancellation finds isActive() still true and backs
+    // off, expecting to be resumed. Cancellation is that moment; without it
+    // scanning stays dead until something else asks again.
+    if (scanRequested)
+        beginScanWindow();
 }
 
 void BleManager::onErrorOccurred(QBluetoothDeviceDiscoveryAgent::Error error)

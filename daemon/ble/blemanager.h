@@ -77,6 +77,7 @@ public:
 private slots:
     void onDeviceDiscovered(const QBluetoothDeviceInfo &info);
     void onScanFinished();
+    void onScanCanceled();
     void onErrorOccurred(QBluetoothDeviceDiscoveryAgent::Error error);
 
 signals:
